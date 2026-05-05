@@ -5,19 +5,19 @@
 # Usage:    sudo ./server_audit.sh [--json] [--output /path/to/report.txt]
 # =============================================================================
 
-# Do NOT use set -e; commands like grep legitimately return 1 (no match)
-# and would silently abort the script. We handle errors explicitly.
-set -uo pipefail
+# No set -e / set -o pipefail: grep legitimately exits 1 on no match and
+# would silently kill the script. Errors are handled explicitly below.
 
 # ── Colours ──────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; YELLOW='\033[1;33m'; GREEN='\033[0;32m'
 CYAN='\033[0;36m'; BOLD='\033[1m'; RESET='\033[0m'
 
-# ── Safe command runner: run cmd, return output; never exits on failure ───────
-safe() { "$@" 2>/dev/null || true; }
-
-# ── Run a pipeline and always succeed (grep -c returns 1 when count=0) ────────
-count_lines() { echo "$1" | grep -c . 2>/dev/null || echo 0; }
+# ── Count non-empty lines; always prints exactly one integer, no newlines ─────
+count_lines() {
+  local n
+  n=$(printf '%s' "$1" | grep -c . 2>/dev/null) || n=0
+  echo "${n//[^0-9]/}"   # strip any stray whitespace/newlines from n
+}
 
 # ── Defaults ─────────────────────────────────────────────────────────────────
 JSON_MODE=false
@@ -170,23 +170,23 @@ case "$PKG_MGR" in
     log "  Refreshing package index …"
     apt-get update -qq 2>/dev/null || warn "apt-get update had warnings."
     PENDING_LIST=$(apt-get --just-print upgrade 2>/dev/null | grep '^Inst ' | awk '{print $2, $3}' || true)
-    PENDING_COUNT=$(count_lines "$PENDING_LIST")
+    PENDING_COUNT=$(count_lines "$PENDING_LIST"); PENDING_COUNT=$(( PENDING_COUNT + 0 ))
     ;;
   dnf)
     PENDING_LIST=$(dnf check-update --quiet 2>/dev/null | grep -v '^$\|^Last\|^Loaded\|^Loading' || true)
-    PENDING_COUNT=$(count_lines "$PENDING_LIST")
+    PENDING_COUNT=$(count_lines "$PENDING_LIST"); PENDING_COUNT=$(( PENDING_COUNT + 0 ))
     ;;
   yum)
     PENDING_LIST=$(yum check-update --quiet 2>/dev/null | grep -v '^$\|^Last\|^Loaded\|^Loading' || true)
-    PENDING_COUNT=$(count_lines "$PENDING_LIST")
+    PENDING_COUNT=$(count_lines "$PENDING_LIST"); PENDING_COUNT=$(( PENDING_COUNT + 0 ))
     ;;
   pacman)
     PENDING_LIST=$(pacman -Qu 2>/dev/null || true)
-    PENDING_COUNT=$(count_lines "$PENDING_LIST")
+    PENDING_COUNT=$(count_lines "$PENDING_LIST"); PENDING_COUNT=$(( PENDING_COUNT + 0 ))
     ;;
   zypper)
     PENDING_LIST=$(zypper list-updates 2>/dev/null | grep '|' | tail -n +3 || true)
-    PENDING_COUNT=$(count_lines "$PENDING_LIST")
+    PENDING_COUNT=$(count_lines "$PENDING_LIST"); PENDING_COUNT=$(( PENDING_COUNT + 0 ))
     ;;
   *)
     warn "Cannot list pending updates."
@@ -218,7 +218,7 @@ case "$PKG_MGR" in
     fi
     SEC_LIST_2=$(apt-get --just-print upgrade 2>/dev/null \
       | grep -i 'security' | awk '{print $2}' || true)
-    SEC_COUNT=$(count_lines "$SEC_LIST_2")
+    SEC_COUNT=$(count_lines "$SEC_LIST_2"); SEC_COUNT=$(( SEC_COUNT + 0 ))
     if [[ "$SEC_COUNT" -gt 0 ]]; then
       warn "${SEC_COUNT} security update(s) pending:"
       echo "$SEC_LIST_2" | while IFS= read -r line; do log "  ${RED}${line}${RESET}"; done
@@ -228,7 +228,7 @@ case "$PKG_MGR" in
     ;;
   dnf)
     SEC_LIST=$(dnf updateinfo list security 2>/dev/null | grep 'RHSA\|CVE\|Security' || true)
-    SEC_COUNT=$(count_lines "$SEC_LIST")
+    SEC_COUNT=$(count_lines "$SEC_LIST"); SEC_COUNT=$(( SEC_COUNT + 0 ))
     if [[ "$SEC_COUNT" -gt 0 ]]; then
       warn "${SEC_COUNT} security advisory/advisories:"
       echo "$SEC_LIST" | while IFS= read -r line; do log "  ${RED}${line}${RESET}"; done
@@ -238,7 +238,7 @@ case "$PKG_MGR" in
     ;;
   yum)
     SEC_LIST=$(yum --security check-update 2>/dev/null | grep -v '^$\|^Loaded' || true)
-    SEC_COUNT=$(count_lines "$SEC_LIST")
+    SEC_COUNT=$(count_lines "$SEC_LIST"); SEC_COUNT=$(( SEC_COUNT + 0 ))
     if [[ "$SEC_COUNT" -gt 0 ]]; then
       warn "${SEC_COUNT} security update(s) pending."
       echo "$SEC_LIST" | while IFS= read -r line; do log "  ${RED}${line}${RESET}"; done
@@ -249,7 +249,7 @@ case "$PKG_MGR" in
   pacman)
     if command -v arch-audit &>/dev/null; then
       SEC_LIST=$(arch-audit 2>/dev/null || true)
-      SEC_COUNT=$(count_lines "$SEC_LIST")
+      SEC_COUNT=$(count_lines "$SEC_LIST"); SEC_COUNT=$(( SEC_COUNT + 0 ))
       if [[ "$SEC_COUNT" -gt 0 ]]; then
         warn "arch-audit findings:"
         echo "$SEC_LIST" | while IFS= read -r line; do log "  $line"; done
@@ -262,7 +262,7 @@ case "$PKG_MGR" in
     ;;
   zypper)
     SEC_LIST=$(zypper list-patches --category security 2>/dev/null | grep '|' | tail -n +3 || true)
-    SEC_COUNT=$(count_lines "$SEC_LIST")
+    SEC_COUNT=$(count_lines "$SEC_LIST"); SEC_COUNT=$(( SEC_COUNT + 0 ))
     if [[ "$SEC_COUNT" -gt 0 ]]; then
       warn "${SEC_COUNT} security patch(es) available:"
       echo "$SEC_LIST" | while IFS= read -r line; do log "  $line"; done
@@ -351,6 +351,7 @@ done
 
 if [[ -n "$FAIL_LOG" ]]; then
   FAIL_COUNT=$(grep -c 'Failed password\|Invalid user' "$FAIL_LOG" 2>/dev/null || echo 0)
+  FAIL_COUNT=$(( FAIL_COUNT + 0 ))
   TOP_IPS=$(grep 'Failed password\|Invalid user' "$FAIL_LOG" 2>/dev/null \
     | grep -oP '(\d{1,3}\.){3}\d{1,3}' | sort | uniq -c | sort -rn | head -10 || true)
   warn "Total failed auth attempts in ${FAIL_LOG}: ${FAIL_COUNT}"
